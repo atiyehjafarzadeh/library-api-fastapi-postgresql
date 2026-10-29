@@ -1,18 +1,52 @@
-
 from typing import Optional
+import os
+from dotenv import load_dotenv
 
-from fastapi import FastAPI, HTTPException, Response
+load_dotenv()
+
+from fastapi import FastAPI, HTTPException, Response, Depends
 from pydantic import BaseModel, Field
+from sqlalchemy import create_engine, String, Integer, Boolean
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
 
 
-app = FastAPI(
-    title="Library API",
-    description="A simple library management API built with FastAPI",
-    version="1.0.0",
+# Database connection
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL is not set in .env")
+
+engine = create_engine(DATABASE_URL)
+
+SessionLocal = sessionmaker(
+    bind=engine,
+    autoflush=False,
+    expire_on_commit=False,
 )
 
 
-# Models
+# SQLAlchemy models
+class Base(DeclarativeBase):
+    pass
+
+
+class BookModel(Base):
+    __tablename__ = "books"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    author: Mapped[str] = mapped_column(String(255), nullable=False)
+    year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    available: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+
+
+# Create the table if it does not exist
+Base.metadata.create_all(bind=engine)
+
+
+# Pydantic schemas
 class BookIn(BaseModel):
     title: str = Field(min_length=1)
     author: str = Field(min_length=1)
@@ -27,73 +61,74 @@ class BookUpdate(BaseModel):
     available: Optional[bool] = None
 
 
-# In-memory data (no database)
-books = [
-    {
-        "id": 1,
-        "title": "Clean Code",
-        "author": "Robert C. Martin",
-        "year": 2008,
-        "available": True,
-    },
-    {
-        "id": 2,
-        "title": "The Pragmatic Programmer",
-        "author": "Andrew Hunt",
-        "year": 1999,
-        "available": True,
-    },
-]
+class BookOut(BookIn):
+    id: int
 
-next_id = 3
+    model_config = {"from_attributes": True}
 
 
-# Helper function
-def find_book(book_id: int):
-    for book in books:
-        if book["id"] == book_id:
-            return book
-
-    raise HTTPException(
-        status_code=404,
-        detail="Book not found",
-    )
+app = FastAPI(
+    title="Library API",
+    description="A library management API using PostgreSQL",
+    version="2.0.0",
+)
 
 
-# GET /books - Get all books
-@app.get("/books")
-def get_books():
-    return books
+# Database session dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
-# POST /books - Add a new book
-@app.post("/books", status_code=201)
-def add_book(data: BookIn):
-    global next_id
+def find_book(db: Session, book_id: int) -> BookModel:
+    book = db.get(BookModel, book_id)
 
-    new_book = data.model_dump()
-    new_book["id"] = next_id
+    if book is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Book not found",
+        )
 
-    books.append(new_book)
-    next_id += 1
-
-    return new_book
+    return book
 
 
-# GET /books/{id} - Get a specific book
-@app.get("/books/{id}")
-def get_book(id: int):
-    return find_book(id)
+# GET /books
+@app.get("/books", response_model=list[BookOut])
+def get_books(db: Session = Depends(get_db)):
+    return db.query(BookModel).order_by(BookModel.id).all()
 
 
-# PATCH /books/{id} - Update a book
-@app.patch("/books/{id}")
-def update_book(id: int, data: BookUpdate):
-    book = find_book(id)
+# POST /books
+@app.post("/books", response_model=BookOut, status_code=201)
+def add_book(data: BookIn, db: Session = Depends(get_db)):
+    book = BookModel(**data.model_dump())
 
+    db.add(book)
+    db.commit()
+    db.refresh(book)
+
+    return book
+
+
+# GET /books/{id}
+@app.get("/books/{id}", response_model=BookOut)
+def get_book(id: int, db: Session = Depends(get_db)):
+    return find_book(db, id)
+
+
+# PATCH /books/{id}
+@app.patch("/books/{id}", response_model=BookOut)
+def update_book(
+    id: int,
+    data: BookUpdate,
+    db: Session = Depends(get_db),
+):
+    book = find_book(db, id)
     changes = data.model_dump(exclude_unset=True)
 
-    # Reject null values for all provided fields
     for field, value in changes.items():
         if value is None:
             raise HTTPException(
@@ -101,15 +136,21 @@ def update_book(id: int, data: BookUpdate):
                 detail=f"{field} cannot be null",
             )
 
-    book.update(changes)
+    for field, value in changes.items():
+        setattr(book, field, value)
+
+    db.commit()
+    db.refresh(book)
 
     return book
 
 
-# DELETE /books/{id} - Delete a book
+# DELETE /books/{id}
 @app.delete("/books/{id}", status_code=204)
-def delete_book(id: int):
-    book = find_book(id)
-    books.remove(book)
+def delete_book(id: int, db: Session = Depends(get_db)):
+    book = find_book(db, id)
+
+    db.delete(book)
+    db.commit()
 
     return Response(status_code=204)

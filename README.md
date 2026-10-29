@@ -1,33 +1,46 @@
-# FastAPI Library API
+# Library API (FastAPI + PostgreSQL)
 
-A simple library management REST API built with FastAPI and Pydantic. This project allows users to create, retrieve, update, and delete books without using a database. Book data is stored in an in-memory Python list.
+A library management REST API built with FastAPI, SQLAlchemy, and PostgreSQL. It lets users create, retrieve, update, and delete books, with all data persisted in a PostgreSQL database.
 
 ## Features
 
 - Retrieve all books
 - Add a new book
 - Retrieve a book by ID
-- Update book information using PATCH
+- Partially update a book using PATCH
 - Delete a book by ID
-- Validate request data using Pydantic
-- Handle errors for books that do not exist
-- Automatically generate interactive API documentation
+- Persistent storage with PostgreSQL
+- Request validation with Pydantic
+- Proper error handling (404 for missing books, 422 for invalid data)
+- Automatically generated interactive API documentation (Swagger UI and ReDoc)
 
 ## Technologies
 
 - Python
 - FastAPI
 - Pydantic
+- SQLAlchemy (ORM)
+- PostgreSQL
+- Psycopg2
+- python-dotenv
 - Uvicorn
 
 ## Project Structure
 
 ```text
-fastapi-library-api/
+library-api-fastapi-postgresql/
 ├── main.py
 ├── requirements.txt
+├── .env.example
+├── .gitignore
 └── README.md
 ```
+
+## Prerequisites
+
+- Python 3.10 or newer
+- PostgreSQL installed and running
+- Git
 
 ## Installation
 
@@ -36,19 +49,62 @@ fastapi-library-api/
 Replace `YOUR_USERNAME` with your GitHub username.
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/fastapi-library-api.git
-cd fastapi-library-api
+git clone https://github.com/YOUR_USERNAME/library-api-fastapi-postgresql.git
+cd library-api-fastapi-postgresql
 ```
 
-### 2. Install Dependencies
+### 2. Create a Virtual Environment (recommended)
+
+```bash
+python -m venv venv
+```
+
+Activate it:
+
+```bash
+source venv/bin/activate      # Linux / macOS
+venv\Scripts\activate         # Windows
+```
+
+### 3. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Run the Application
+### 4. Set Up PostgreSQL
 
-Run the following command in the directory containing `main.py`:
+Create a database for the project. For example, using `psql`:
+
+```sql
+CREATE DATABASE library_db;
+```
+
+### 5. Configure Environment Variables
+
+Copy the example file and fill in your own database credentials:
+
+```bash
+cp .env.example .env          # Linux / macOS
+copy .env.example .env        # Windows
+```
+
+Then edit `.env`:
+
+```text
+DATABASE_URL=postgresql://USER:PASSWORD@localhost:5432/library_db
+```
+
+| Part | Description |
+|---|---|
+| `USER` | Your PostgreSQL username (default is often `postgres`) |
+| `PASSWORD` | Your PostgreSQL password |
+| `localhost:5432` | Database host and port |
+| `library_db` | The database name you created |
+
+**Important:** Never commit your real `.env` file. It is listed in `.gitignore`. If your password contains special characters (such as `@` or `#`), URL-encode them.
+
+### 6. Run the Application
 
 ```bash
 uvicorn main:app --reload
@@ -58,9 +114,11 @@ The server will start at:
 
 http://127.0.0.1:8000
 
+The `books` table is created automatically on startup if it does not exist.
+
 ## API Documentation
 
-FastAPI automatically generates interactive API documentation.
+FastAPI automatically generates interactive API documentation:
 
 - **Swagger UI:** http://127.0.0.1:8000/docs
 - **ReDoc:** http://127.0.0.1:8000/redoc
@@ -69,13 +127,13 @@ You can use Swagger UI to test all endpoints directly in your browser.
 
 ## API Endpoints
 
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/books` | Retrieve all books |
-| POST | `/books` | Add a new book |
-| GET | `/books/{id}` | Retrieve a book by ID |
-| PATCH | `/books/{id}` | Update a book |
-| DELETE | `/books/{id}` | Delete a book |
+| Method | Endpoint | Description | Success Status |
+|---|---|---|---|
+| GET | `/books` | Retrieve all books | 200 |
+| POST | `/books` | Add a new book | 201 |
+| GET | `/books/{id}` | Retrieve a book by ID | 200 |
+| PATCH | `/books/{id}` | Update a book | 200 |
+| DELETE | `/books/{id}` | Delete a book | 204 |
 
 ## Example Requests
 
@@ -85,7 +143,11 @@ You can use Swagger UI to test all endpoints directly in your browser.
 GET /books
 ```
 
-Returns a list of all books.
+Returns a list of all books, ordered by ID.
+
+```bash
+curl http://127.0.0.1:8000/books
+```
 
 ### 2. Add a New Book
 
@@ -104,7 +166,23 @@ Request body:
 }
 ```
 
-A successful request returns `201 Created` and the new book, including its automatically assigned ID.
+```bash
+curl -X POST http://127.0.0.1:8000/books \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Python Crash Course", "author": "Eric Matthes", "year": 2019, "available": true}'
+```
+
+Response (`201 Created`):
+
+```json
+{
+  "title": "Python Crash Course",
+  "author": "Eric Matthes",
+  "year": 2019,
+  "available": true,
+  "id": 1
+}
+```
 
 ### 3. Retrieve a Book by ID
 
@@ -112,9 +190,7 @@ A successful request returns `201 Created` and the new book, including its autom
 GET /books/1
 ```
 
-Returns the details of the book with ID `1`.
-
-If the book does not exist, the API returns `404 Not Found`.
+Returns the details of the book with ID `1`. If the book does not exist, the API returns `404 Not Found`.
 
 ### 4. Update a Book
 
@@ -130,9 +206,13 @@ Request body:
 }
 ```
 
-Only the fields provided in the request are updated. Other fields remain unchanged.
+```bash
+curl -X PATCH http://127.0.0.1:8000/books/1 \
+  -H "Content-Type: application/json" \
+  -d '{"available": false}'
+```
 
-Explicitly provided `null` values are rejected with `422 Unprocessable Entity`.
+Only the fields provided in the request are updated. Other fields remain unchanged. Explicitly provided `null` values are rejected with `422 Unprocessable Entity`.
 
 ### 5. Delete a Book
 
@@ -140,15 +220,47 @@ Explicitly provided `null` values are rejected with `422 Unprocessable Entity`.
 DELETE /books/1
 ```
 
-Deletes the book with ID `1`.
+```bash
+curl -X DELETE http://127.0.0.1:8000/books/1
+```
 
-A successful request returns `204 No Content`. If the book does not exist, the API returns `404 Not Found`.
+Returns `204 No Content` on success, or `404 Not Found` if the book does not exist.
+
+## Error Responses
+
+| Status | Meaning |
+|---|---|
+| 404 Not Found | The requested book does not exist |
+| 422 Unprocessable Entity | Invalid request data (for example, an empty title, a negative year, or a `null` value in PATCH) |
+
+Example error body:
+
+```json
+{
+  "detail": "Book not found"
+}
+```
 
 ## Data Storage
 
-This project uses an in-memory Python list instead of a database.
+Book data is stored in a PostgreSQL database and persists across application restarts. The connection is configured through the `DATABASE_URL` environment variable, and the database is accessed using the SQLAlchemy ORM.
 
-**Note:** Changes are temporary and will be lost when the application restarts. The initial sample books will be loaded again.
+### Books Table
+
+| Column | Type | Notes |
+|---|---|---|
+| id | Integer | Primary key, auto-incremented |
+| title | String(255) | Required |
+| author | String(255) | Required |
+| year | Integer | Optional |
+| available | Boolean | Required, defaults to `true` |
+
+## Troubleshooting
+
+- **`DATABASE_URL is not set in .env`**: Make sure you created a `.env` file (copied from `.env.example`) in the same directory as `main.py`.
+- **`connection refused` or `could not connect to server`**: Make sure PostgreSQL is running and the host and port in `DATABASE_URL` are correct.
+- **`password authentication failed`**: Check the username and password in `DATABASE_URL`.
+- **`database "library_db" does not exist`**: Create the database first (see step 4).
 
 ## License
 
